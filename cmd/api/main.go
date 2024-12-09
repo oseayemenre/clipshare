@@ -1,9 +1,12 @@
 package main
 
-import "log"
+import (
+	"github.com/oseayemenre/clip_share/internal/ip"
+	"log"
+)
 
 func main() {
-	svr := NewServer("3000")
+	svr := NewServer(ip.GetPrivateIp())
 
 	if err := svr.run(); err != nil {
 		log.Fatal(err)

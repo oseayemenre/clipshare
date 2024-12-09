@@ -38,5 +38,5 @@ func (s *server) run() error {
 	r.Handle("/ws", websocket.Handler(s.handleConnections))
 
 	log.Printf("Server is listening on %s", s.Server.Addr)
-	return http.ListenAndServe(":"+s.Server.Addr, r)
+	return http.ListenAndServe(s.Server.Addr, r)
 }
