@@ -7,20 +7,16 @@ import (
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
-	"github.com/oseayemenre/clip_share/internal/types"
-	"golang.org/x/net/websocket"
+	"github.com/gorilla/websocket"
 )
 
 type server struct {
-	*types.Server
+	addr string
 }
 
 func NewServer(addr string) *server {
 	return &server{
-		Server: &types.Server{
-			Addr: addr,
-			Conn: make(map[websocket.Conn]bool),
-		},
+		addr,
 	}
 }
 
@@ -35,8 +31,23 @@ func (s *server) run() error {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(15 * time.Second))
 
-	r.Handle("/ws", websocket.Handler(s.handleConnections))
+	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+		}
 
-	log.Printf("Server is listening on %s", s.Server.Addr)
-	return http.ListenAndServe(s.Server.Addr, r)
+		upgrader.CheckOrigin = func(r *http.Request) bool {
+			return true
+		}
+
+		ws, err := upgrader.Upgrade(w, r, nil)
+
+		if err != nil {
+			log.Println(err)
+		}
+	})
+
+	log.Printf("Server is listening on %s", s.addr)
+	return http.ListenAndServe(s.addr, r)
 }
