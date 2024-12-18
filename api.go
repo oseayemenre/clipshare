@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -20,7 +20,13 @@ func NewServer(addr string) *server {
 	}
 }
 
-func (s *server) handleConnections(w *websocket.Conn) {}
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+}
 
 func (s *server) run() error {
 	r := chi.NewRouter()
@@ -31,23 +37,28 @@ func (s *server) run() error {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(15 * time.Second))
 
-	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		upgrader := websocket.Upgrader{
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
-		}
+	h := NewHub()
 
-		upgrader.CheckOrigin = func(r *http.Request) bool {
-			return true
-		}
-
-		ws, err := upgrader.Upgrade(w, r, nil)
-
-		if err != nil {
-			log.Println(err)
-		}
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Server is up and running"))
 	})
 
-	log.Printf("Server is listening on %s", s.addr)
+	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+
+		if err != nil {
+			slog.Error(err.Error())
+		}
+
+		client := NewClient(conn, h)
+
+		h.registerClient(client)
+
+		go client.readLoop()
+		go client.writeLoop()
+	})
+
+	slog.Info("Server is listening on " + s.addr)
 	return http.ListenAndServe(s.addr, r)
 }
