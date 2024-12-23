@@ -28,7 +28,7 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
-func (s *server) run() error {
+func (s *server) buildHTTPServer() *http.Server {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RealIP)
@@ -52,13 +52,16 @@ func (s *server) run() error {
 		}
 
 		client := NewClient(conn, h)
-
 		h.registerClient(client)
 
 		go client.readLoop()
 		go client.writeLoop()
 	})
 
-	slog.Info("Server is listening on " + s.addr)
-	return http.ListenAndServe(s.addr, r)
+	server := &http.Server{
+		Addr:    s.addr,
+		Handler: r,
+	}
+
+	return server
 }
