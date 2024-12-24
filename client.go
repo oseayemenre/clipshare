@@ -27,6 +27,7 @@ func (c *client) readLoop() {
 
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(pongMsg string) error {
+		slog.Debug("PONG!")
 		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 	c.conn.SetReadLimit(512)
@@ -72,7 +73,7 @@ func (c *client) writeLoop() {
 			if err := c.conn.WriteMessage(websocket.PingMessage, []byte("")); err != nil {
 				slog.Error("Ping error", slog.String("error", err.Error()))
 			}
-			slog.Info("PING!")
+			slog.Debug("PING!")
 		}
 	}
 }
