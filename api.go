@@ -48,7 +48,7 @@ func (s *server) buildHTTPServer() *http.Server {
 		conn, err := upgrader.Upgrade(w, r, nil)
 
 		if err != nil {
-			slog.Error(err.Error())
+			slog.Error("Unable to upgrade connection", slog.String("error", err.Error()))
 		}
 
 		client := NewClient(conn, h)

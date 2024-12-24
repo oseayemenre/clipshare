@@ -2,6 +2,7 @@ package main
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -12,12 +13,23 @@ type client struct {
 	egress chan []byte
 }
 
+var (
+	pongWait     = 10 * time.Second
+	pingInterval = pongWait * 9 / 10
+)
+
 func NewClient(ws *websocket.Conn, hub *hub) *client {
 	return &client{conn: ws, hub: hub}
 }
 
 func (c *client) readLoop() {
 	defer c.hub.unregisterClient(c)
+
+	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetPongHandler(func(pongMsg string) error {
+		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
+	c.conn.SetReadLimit(512)
 
 	_, message, err := c.conn.ReadMessage()
 
@@ -38,21 +50,29 @@ func (c *client) readLoop() {
 func (c *client) writeLoop() {
 	defer c.hub.unregisterClient(c)
 
+	ticker := time.NewTicker(pingInterval)
+
 	for {
-		message, ok := <-c.egress
-
-		if !ok {
-			if err := c.conn.WriteMessage(websocket.CloseMessage, []byte("connection closed")); err != nil {
-				slog.Error("connection closed")
+		select {
+		case message, ok := <-c.egress:
+			if !ok {
+				if err := c.conn.WriteMessage(websocket.CloseMessage, []byte("connection closed")); err != nil {
+					slog.Error("connection closed")
+				}
+				return
 			}
-			return
-		}
 
-		if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-			slog.Error("Something went wrong")
-			return
-		}
+			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				slog.Error("Something went wrong")
+				return
+			}
 
-		slog.Info("Message sent")
+			slog.Info("Message sent")
+		case <-ticker.C:
+			if err := c.conn.WriteMessage(websocket.PingMessage, []byte("")); err != nil {
+				slog.Error("Ping error", slog.String("error", err.Error()))
+			}
+			slog.Info("PING!")
+		}
 	}
 }
