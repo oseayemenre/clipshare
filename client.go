@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -8,9 +9,16 @@ import (
 )
 
 type client struct {
+	id   string
 	conn *websocket.Conn
 	*hub
 	egress chan []byte
+}
+
+type Event struct {
+	Type    string `json:"type"`
+	To      string `json:"to"`
+	Message string `json:"message"`
 }
 
 var (
@@ -18,12 +26,14 @@ var (
 	pingInterval = pongWait * 9 / 10
 )
 
-func NewClient(ws *websocket.Conn, hub *hub) *client {
-	return &client{conn: ws, hub: hub}
+func NewClient(ws *websocket.Conn, id string, hub *hub) *client {
+	return &client{id: id, conn: ws, hub: hub, egress: make(chan []byte)}
 }
 
 func (c *client) readLoop() {
-	defer c.hub.unregisterClient(c)
+	defer func() {
+		c.hub.unregister <- c
+	}()
 
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(pongMsg string) error {
@@ -32,24 +42,40 @@ func (c *client) readLoop() {
 	})
 	c.conn.SetReadLimit(512)
 
-	_, message, err := c.conn.ReadMessage()
+	for {
+		_, message, err := c.conn.ReadMessage()
 
-	if err != nil {
-		if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-			slog.Error(err.Error())
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				slog.Error(err.Error())
+			}
+			return
 		}
-		return
-	}
 
-	slog.Debug(string(message))
+		var event *Event
 
-	for client := range c.hub.clients {
-		client.egress <- message
+		if err := json.Unmarshal(message, &event); err != nil {
+			slog.Error("Invalid message", slog.String("error", err.Error()))
+			continue
+		}
+
+		switch event.Type {
+		case "private_message":
+			c.egress <- message
+
+		case "broadcast_message":
+			c.hub.broadcast <- message
+		default:
+			continue
+		}
+
 	}
 }
 
 func (c *client) writeLoop() {
-	defer c.hub.unregisterClient(c)
+	defer func() {
+		c.hub.unregister <- c
+	}()
 
 	ticker := time.NewTicker(pingInterval)
 
@@ -73,7 +99,7 @@ func (c *client) writeLoop() {
 			if err := c.conn.WriteMessage(websocket.PingMessage, []byte("")); err != nil {
 				slog.Error("Ping error", slog.String("error", err.Error()))
 			}
-			slog.Debug("PING!")
+			slog.Info("PING!")
 		}
 	}
 }

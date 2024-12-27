@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -47,12 +48,14 @@ func (s *server) buildHTTPServer() *http.Server {
 	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 
+		go h.run()
+
 		if err != nil {
 			slog.Error("Unable to upgrade connection", slog.String("error", err.Error()))
 		}
 
-		client := NewClient(conn, h)
-		h.registerClient(client)
+		client := NewClient(conn, uuid.New().String(), h)
+		h.register <- client
 
 		go client.readLoop()
 		go client.writeLoop()
