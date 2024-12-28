@@ -17,7 +17,7 @@ type client struct {
 
 type Event struct {
 	Type    string `json:"type"`
-	To      string `json:"to"`
+	To      string `json:"to,omitempty"`
 	Message string `json:"message"`
 }
 
@@ -52,7 +52,7 @@ func (c *client) readLoop() {
 			return
 		}
 
-		var event *Event
+		var event Event
 
 		if err := json.Unmarshal(message, &event); err != nil {
 			slog.Error("Invalid message", slog.String("error", err.Error()))
@@ -61,7 +61,17 @@ func (c *client) readLoop() {
 
 		switch event.Type {
 		case "private_message":
-			c.egress <- message
+			if event.To == "" {
+				slog.Warn("Missing recipient id in private_message sent")
+				continue
+			}
+
+			if reciever, ok := c.hub.clients[event.To]; ok {
+				reciever.egress <- message
+				slog.Info("Private message sent", slog.String("to", event.To))
+			} else {
+				slog.Error("client doesn't exist", slog.String("to", event.To))
+			}
 
 		case "broadcast_message":
 			c.hub.broadcast <- message

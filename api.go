@@ -39,6 +39,7 @@ func (s *server) buildHTTPServer() *http.Server {
 	r.Use(middleware.Timeout(15 * time.Second))
 
 	h := NewHub()
+	go h.run()
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -47,8 +48,6 @@ func (s *server) buildHTTPServer() *http.Server {
 
 	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
-
-		go h.run()
 
 		if err != nil {
 			slog.Error("Unable to upgrade connection", slog.String("error", err.Error()))
