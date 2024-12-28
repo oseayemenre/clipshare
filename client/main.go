@@ -3,16 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"github.com/gorilla/websocket"
-	"github.com/joho/godotenv"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
 	"runtime"
-	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/joho/godotenv"
 )
 
 type Payload struct {
@@ -21,7 +22,7 @@ type Payload struct {
 	Message string `json:"message"`
 }
 
-func run() {
+func run(ctx context.Context) {
 	godotenv.Load()
 
 	clientOs := runtime.GOOS
@@ -33,6 +34,7 @@ func run() {
 	}
 
 	conn, _, err := websocket.DefaultDialer.Dial("ws://"+addr+"/ws", nil)
+	defer conn.Close()
 
 	if err != nil {
 		slog.Error("Unable to connect to websocket server", slog.String("error", err.Error()))
@@ -40,61 +42,48 @@ func run() {
 	}
 
 	var payload *Payload
+	var out []byte
 
-	switch clientOs {
-	case "windows":
-		for {
-			out, err := exec.Command("powershell", "-Command", "Get-Clipboard").Output()
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("Kill signal recieved...")
+			return
+		default:
+			switch clientOs {
+			case "windows":
+				out, err = exec.Command("powershell", "-Command", "Get-Clipboard").Output()
 
-			if err != nil {
-				slog.Error("Something went wrong", slog.String("error", err.Error()))
-				os.Exit(1)
+			case "linux":
+				out, err = exec.Command("xclip", "-selection", "clipboard", "-o").Output()
+
+			case "darwin":
+				out, err = exec.Command("pbpaste").Output()
 			}
-
-			payload = &Payload{Type: "", To: "", Message: strings.TrimSpace(string(out))}
-
-			data, err := json.Marshal(payload)
-
-			if err != nil {
-				slog.Error("Unable to marshal json", slog.String("error", err.Error()))
-				continue
-			}
-
-			err = conn.WriteMessage(websocket.TextMessage, data)
-
-			if err != nil {
-				slog.Error("Unable to write to websocket connection", slog.String("error", err.Error()))
-				continue
-			}
-
-			time.Sleep(1 * time.Second)
 		}
 
-	case "linux":
-		for {
-			out, err := exec.Command("xclip", "-selection", "clipboard", "-o").Output()
-
-			if err != nil {
-				slog.Error("Something went wrong", slog.String("error", err.Error()))
-				os.Exit(1)
-			}
-
-			slog.Info(strings.TrimSpace(string(out)))
-			time.Sleep(1 * time.Second)
+		if err != nil {
+			slog.Error("Something went wrong", slog.String("error", err.Error()))
+			os.Exit(1)
 		}
 
-	case "darwin":
-		for {
-			out, err := exec.Command("pbpaste").Output()
+		payload = &Payload{Type: "broadcast_message", Message: string(out)}
 
-			if err != nil {
-				slog.Error("Something went wrong", slog.String("error", err.Error()))
-				os.Exit(1)
-			}
+		data, err := json.Marshal(payload)
 
-			slog.Info(strings.TrimSpace(string(out)))
-			time.Sleep(1 * time.Second)
+		if err != nil {
+			slog.Error("Unable to marshal json", slog.String("error", err.Error()))
+			continue
 		}
+
+		err = conn.WriteMessage(websocket.TextMessage, data)
+
+		if err != nil {
+			slog.Error("Unable to write to websocket connection", slog.String("error", err.Error()))
+			return
+		}
+
+		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -105,18 +94,16 @@ func main() {
 	sigctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	wg := &sync.WaitGroup{}
+
+	wg.Add(1)
+
 	go func() {
-		for {
-			select {
-			case <-sigctx.Done():
-				slog.Info("Kill signal recieved...")
-				return
-			default:
-				run()
-			}
-		}
+		defer wg.Done()
+		run(sigctx)
 	}()
 
 	<-sigctx.Done()
+	wg.Wait()
 	slog.Info("Gracefully shutting down...")
 }

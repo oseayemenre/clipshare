@@ -44,6 +44,7 @@ func (c *client) readLoop() {
 
 	for {
 		_, message, err := c.conn.ReadMessage()
+		slog.Info(string(message))
 
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
