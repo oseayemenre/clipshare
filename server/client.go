@@ -72,13 +72,13 @@ func (c *client) readLoop() {
 			} else {
 				slog.Error("client doesn't exist", slog.String("to", event.To))
 			}
+			continue
 
 		case "broadcast_message":
 			c.hub.broadcast <- message
 		default:
 			continue
 		}
-
 	}
 }
 
