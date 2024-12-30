@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
-	"sync"
 	"syscall"
 	"time"
 
@@ -22,34 +21,39 @@ type Payload struct {
 	Message string `json:"message"`
 }
 
-func run(ctx context.Context) {
+func run(ctx context.Context) (string, error) {
 	godotenv.Load()
 
-	clientOs := runtime.GOOS
-	addr := os.Getenv("ADDR")
-
-	if addr == " " {
-		slog.Error("No address provided")
-		os.Exit(1)
-	}
-
-	conn, _, err := websocket.DefaultDialer.Dial("ws://"+addr+"/ws", nil)
-	defer conn.Close()
-
-	if err != nil {
-		slog.Error("Unable to connect to websocket server", slog.String("error", err.Error()))
-		os.Exit(1)
-	}
-
-	var payload *Payload
-	var out []byte
+	sigctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-sigctx.Done():
 			slog.Info("Kill signal recieved...")
-			return
+			return "", nil
 		default:
+			clientOs := runtime.GOOS
+			addr := os.Getenv("ADDR")
+
+			if addr == " " {
+				slog.Error("No address provided")
+				os.Exit(1)
+			}
+			conn, _, err := websocket.DefaultDialer.Dial("ws://"+addr+"/ws", nil)
+			defer conn.Close()
+			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			conn.SetPongHandler(func(msg string) error {
+				slog.Info("PONG")
+				return conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			})
+
+			if err != nil {
+				return "Unable to connect to websocket server", err
+			}
+
+			var out []byte
+
 			switch clientOs {
 			case "windows":
 				out, err = exec.Command("powershell", "-Command", "Get-Clipboard").Output()
@@ -60,30 +64,21 @@ func run(ctx context.Context) {
 			case "darwin":
 				out, err = exec.Command("pbpaste").Output()
 			}
+
+			data, err := json.Marshal(&Payload{Type: "broadcast_message", Message: string(out)})
+
+			if err != nil {
+				return "Unable to marshal data", err
+			}
+
+			for {
+				err := conn.WriteMessage(websocket.TextMessage, data)
+				if err != nil {
+					return "Connection closed", err
+				}
+			}
 		}
 
-		if err != nil {
-			slog.Error("Something went wrong", slog.String("error", err.Error()))
-			os.Exit(1)
-		}
-
-		payload = &Payload{Type: "broadcast_message", Message: string(out)}
-
-		data, err := json.Marshal(payload)
-
-		if err != nil {
-			slog.Error("Unable to marshal json", slog.String("error", err.Error()))
-			continue
-		}
-
-		err = conn.WriteMessage(websocket.TextMessage, data)
-
-		if err != nil {
-			slog.Error("Unable to write to websocket connection", slog.String("error", err.Error()))
-			return
-		}
-
-		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -91,19 +86,12 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
 
-	sigctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	ctx := context.Background()
 
-	wg := &sync.WaitGroup{}
+	if data, err := run(ctx); err != nil {
+		slog.Error(data, slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-		run(sigctx)
-	}()
-
-	<-sigctx.Done()
-	wg.Wait()
 	slog.Info("Gracefully shutting down...")
 }
