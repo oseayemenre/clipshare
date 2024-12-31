@@ -27,31 +27,44 @@ func run(ctx context.Context) (string, error) {
 	sigctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	clientOs := runtime.GOOS
+	addr := os.Getenv("ADDR")
+
+	if addr == " " {
+		slog.Error("No address provided")
+		os.Exit(1)
+	}
+	conn, _, err := websocket.DefaultDialer.Dial("ws://"+addr+"/ws", nil)
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	conn.SetPongHandler(func(msg string) error {
+		slog.Info("PONG")
+		return conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	})
+
+	if err != nil {
+		return "Unable to connect to websocket server", err
+	}
+
 	for {
 		select {
 		case <-sigctx.Done():
 			slog.Info("Kill signal recieved...")
 			return "", nil
-		default:
-			clientOs := runtime.GOOS
-			addr := os.Getenv("ADDR")
+		case <-ticker.C:
 
-			if addr == " " {
-				slog.Error("No address provided")
-				os.Exit(1)
-			}
-			conn, _, err := websocket.DefaultDialer.Dial("ws://"+addr+"/ws", nil)
-			defer conn.Close()
-			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-			conn.SetPongHandler(func(msg string) error {
-				slog.Info("PONG")
-				return conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-			})
-
-			if err != nil {
-				return "Unable to connect to websocket server", err
-			}
-
+			go func() {
+				for {
+					_, _, err := conn.ReadMessage()
+					if err != nil {
+						slog.Error("Error reading message", slog.String("error", err.Error()))
+						return
+					}
+				}
+			}()
 			var out []byte
 
 			switch clientOs {
@@ -71,11 +84,9 @@ func run(ctx context.Context) (string, error) {
 				return "Unable to marshal data", err
 			}
 
-			for {
-				err := conn.WriteMessage(websocket.TextMessage, data)
-				if err != nil {
-					return "Connection closed", err
-				}
+			err = conn.WriteMessage(websocket.TextMessage, data)
+			if err != nil {
+				return "Connection closed", err
 			}
 		}
 
